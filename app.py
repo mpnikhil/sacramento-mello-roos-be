@@ -30,9 +30,6 @@ def get_tax_details():
     # Extract parcel number
     parcel_number = parcel_data['features'][0]['attributes']['APN']
 
-    # Get the current year
-    current_year = datetime.now().year
-
     # Fetch bill details using the parcel number
     bill_summary_url = f"https://eproptax.saccounty.net/servicev2/eproptax.svc/rest/BillSummary?parcel={parcel_number}"
     bill_response = requests.get(bill_summary_url)
@@ -41,11 +38,12 @@ def get_tax_details():
     if not bill_data.get('Success'):
         return jsonify({"error": "Failed to retrieve bill data"}), 400
 
-    # Get the bill number
+    # Get the bill number and roll date
     bill_number = bill_data['Bills'][0]['BillNumber']
+    roll_date = bill_data['Bills'][0]['RollDate']
 
     # Fetch levy details using the bill number and current year
-    levy_url = f"https://eproptax.saccounty.net/servicev2/eproptax.svc/rest/DirectLevy?rollYear={current_year}&billNumber={bill_number}"
+    levy_url = f"https://eproptax.saccounty.net/servicev2/eproptax.svc/rest/DirectLevy?rollYear={roll_date}&billNumber={bill_number}"
     levy_response = requests.get(levy_url)
     levy_data = levy_response.json()
 
