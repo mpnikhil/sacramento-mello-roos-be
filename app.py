@@ -10,8 +10,12 @@ session.headers.update({
 })
 
 app = Flask(__name__)
-# Allow only the frontend URL for CORS
-CORS(app, resources={r"/*": {"origins": "https://sacramento-mello-roos.vercel.app"}})
+# Allow CORS for development and production
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Vercel serverless function handler
+def handler(event, context):
+    return app
 
 @app.route('/get-tax-details', methods=['GET'])
 def get_tax_details():
