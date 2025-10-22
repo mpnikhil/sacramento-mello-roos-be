@@ -2,7 +2,16 @@
 
 FROM python:3.11-slim
 
-# Install system dependencies for Playwright
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install system dependencies for Playwright (must be done before playwright install-deps)
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -26,20 +35,19 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxext6 \
+    libxshmfence1 \
+    libglib2.0-0 \
+    libnss3 \
+    libpango-1.0-0 \
+    libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /app
-
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright browsers and their dependencies
+RUN playwright install --with-deps chromium
 
 # Copy application code
 COPY . .
