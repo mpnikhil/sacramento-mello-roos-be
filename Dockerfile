@@ -11,43 +11,49 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install system dependencies for Playwright (must be done before playwright install-deps)
+# Install system dependencies for Playwright Chromium
 RUN apt-get update && apt-get install -y \
+    # Core dependencies
     wget \
-    gnupg \
     ca-certificates \
     fonts-liberation \
+    fonts-noto-color-emoji \
+    fonts-unifont \
+    # Audio
     libasound2 \
+    # GTK/Graphics
     libatk-bridge2.0-0 \
     libatk1.0-0 \
     libatspi2.0-0 \
+    libcairo2 \
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
     libgbm1 \
+    libglib2.0-0 \
     libgtk-3-0 \
+    libpango-1.0-0 \
+    # Security/Crypto
     libnspr4 \
     libnss3 \
+    # X11
     libwayland-client0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    xdg-utils \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
     libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
     libxshmfence1 \
-    libglib2.0-0 \
-    libnss3 \
-    libpango-1.0-0 \
-    libcairo2 \
+    # Utils
+    xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers and their dependencies
-RUN playwright install --with-deps chromium
+# Install Playwright Chromium (without --with-deps since we installed deps manually)
+RUN playwright install chromium
 
 # Copy application code
 COPY . .
