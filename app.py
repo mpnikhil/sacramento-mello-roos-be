@@ -1,169 +1,193 @@
-import requests
 from flask import Flask, request, jsonify
-from datetime import datetime
 from flask_cors import CORS
-
-# Create a session for API requests to handle cookies properly
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-})
+from scraper import PropertyTaxScraper
+import os
 
 app = Flask(__name__)
-# Allow CORS for development and production
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Vercel serverless function handler
-def handler(event, context):
-    return app
+# Initialize the scraper (runs browser in headless mode by default)
+scraper = PropertyTaxScraper(
+    headless=os.getenv('BROWSER_HEADLESS', 'true').lower() == 'true'
+)
 
-@app.route('/get-tax-details', methods=['GET'])
-def get_tax_details():
+@app.route('/', methods=['GET'])
+def home():
+    """Health check endpoint"""
+    return jsonify({
+        "service": "Sacramento Mello Roos Tax API",
+        "status": "running",
+        "version": "1.0.0",
+        "description": "Scrapes Sacramento County property tax data and returns Mello Roos information",
+        "endpoints": {
+            "/get-mello-roos": "GET - Get Mello Roos tax by address",
+            "/health": "GET - Health check"
+        },
+        "example": "/get-mello-roos?street_number=932&street_name=farmhouse%20way&city=Folsom"
+    })
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check for deployment platforms"""
+    return jsonify({"status": "healthy"}), 200
+
+@app.route('/get-mello-roos', methods=['GET'])
+def get_mello_roos():
+    """
+    Get Mello Roos tax data for a property by address.
+    
+    Query Parameters:
+        - street_number: Street number (e.g., "932")
+        - street_name: Street name (e.g., "farmhouse way")
+        - city: City name (default: "Folsom")
+    
+    Returns:
+        JSON with property info and Mello Roos tax details
+    """
     # Get parameters from the request
     street_number = request.args.get('street_number')
     street_name = request.args.get('street_name')
-    city = request.args.get('city')
-
-    print(f"Street Number: {street_number}, Street Name: {street_name}, City: {city}")  # Debugging line
-
-    # ArcGIS API to get parcel number
-    parcel_api_url = "https://services1.arcgis.com/5NARefyPVtAeuJPU/arcgis/rest/services/Parcels/FeatureServer/0/query"
-    where_clause = f"STREET_NBR='{street_number}' AND STREET_NAM='{street_name}' AND CITY='{city}'"
-    params = {
-        'where': where_clause,
-        'outFields': '*',
-        'f': 'json'
-    }
-
-    # Fetch parcel data
-    parcel_response = session.get(parcel_api_url, params=params)
-    if parcel_response.status_code != 200:
-        return jsonify({"error": f"Parcel API request failed with status code {parcel_response.status_code}, response: {parcel_response.text}"}), 400
-
-    # Check if response has content and is valid JSON
+    city = request.args.get('city', 'Folsom')
+    
+    # Validation
+    if not street_number or not street_name:
+        return jsonify({
+            "error": "Missing required parameters",
+            "required": ["street_number", "street_name"],
+            "optional": ["city (default: Folsom)"],
+            "example": "/get-mello-roos?street_number=932&street_name=farmhouse%20way&city=Folsom"
+        }), 400
+    
+    print(f"[API] Scraping: {street_number} {street_name}, {city}")
+    
     try:
-        if not parcel_response.text.strip():
-            return jsonify({"error": "Parcel API returned empty response"}), 400
-        parcel_data = parcel_response.json()
-    except requests.exceptions.JSONDecodeError as e:
-        return jsonify({"error": f"Parcel API returned invalid JSON: {str(e)}, response: {parcel_response.text}"}), 400
-
-    # Ensure parcel data is valid
-    if 'features' not in parcel_data or len(parcel_data['features']) == 0:
-        return jsonify({"error": "No parcel data found"}), 400
-
-    parcel_number = parcel_data['features'][0]['attributes'].get('APN')
-    if not parcel_number:
-        return jsonify({"error": "Parcel number not found"}), 400
-
-    # Try to fetch bill details using the parcel number
-    bill_summary_url = f"https://eproptax.saccounty.net/servicev2/eproptax.svc/rest/BillSummary?parcel={parcel_number}"
-    bill_response = session.get(bill_summary_url)
-
-    # Check if we got HTML error page instead of JSON
-    is_html_error = '<!DOCTYPE html>' in bill_response.text or '<title>' in bill_response.text
-
-    if bill_response.status_code != 200 or is_html_error:
-        # Bill API failed or returned HTML error - provide parcel info with note
-        return jsonify({
-            "error": "Unable to retrieve current tax bill details via API. This is a known limitation with the Sacramento County eProptax system.",
-            "parcel_info": {
-                "apn": parcel_number,
-                "address": f"{street_number} {street_name}, {city}",
-                "note": "For current tax bill information, please visit the Sacramento County eProptax website directly or contact the county assessor's office."
+        # Scrape the data using Playwright
+        result = scraper.scrape_property_data(
+            street_number=street_number,
+            street_name=street_name,
+            city=city
+        )
+        
+        # Check for errors
+        if result.get('error'):
+            return jsonify({
+                "success": False,
+                "error": result['error'],
+                "timestamp": result['timestamp']
+            }), 500
+        
+        if not result.get('property_info'):
+            return jsonify({
+                "success": False,
+                "error": "No property found for the given address",
+                "search_query": result['search_query']
+            }), 404
+        
+        # Extract Mello Roos information
+        mello_roos_data = extract_mello_roos(result)
+        
+        # Format response
+        response_data = {
+            "success": True,
+            "property_info": {
+                "address": result['property_info'].get('address'),
+                "city": result['property_info'].get('city'),
+                "zip": result['property_info'].get('zip'),
+                "account_number": result['property_info'].get('account_number'),
+                "parcel_number": result['property_info'].get('parcel_number')
             },
-            "available_data": {
-                "parcel_found": True,
-                "bill_api_available": False,
-                "levy_api_available": False
-            }
-        })
-
-    # Check if response has content and is valid JSON
-    try:
-        if not bill_response.text.strip():
-            return jsonify({"error": "Bill API returned empty response"}), 400
-        bill_data = bill_response.json()
-    except requests.exceptions.JSONDecodeError as e:
-        return jsonify({"error": f"Bill API returned invalid JSON: {str(e)}, response: {bill_response.text}"}), 400
-
-    # Ensure bill data is valid
-    if not bill_data.get('Success'):
-        return jsonify({
-            "error": "Bill API did not return successful data",
-            "parcel_info": {
-                "apn": parcel_number,
-                "address": f"{street_number} {street_name}, {city}"
-            },
-            "bill_data": bill_data
-        })
-
-    # Get the bill number and roll date
-    bill_number = bill_data['Bills'][0]['BillNumber']
-    roll_date = bill_data['Bills'][0]['RollDate']
-
-    # Fetch levy details using the bill number and current year
-    levy_url = f"https://eproptax.saccounty.net/servicev2/eproptax.svc/rest/DirectLevy?rollYear={roll_date}&billNumber={bill_number}"
-    levy_response = session.get(levy_url)
-
-    # Check if levy API also has issues
-    levy_is_html_error = '<!DOCTYPE html>' in levy_response.text or '<title>' in levy_response.text
-
-    if levy_response.status_code != 200 or levy_is_html_error:
-        # Levy API also failed - return partial information
-        return jsonify({
-            "partial_success": True,
-            "parcel_info": {
-                "apn": parcel_number,
-                "address": f"{street_number} {street_name}, {city}"
-            },
-            "bill_info": {
-                "bill_number": bill_number,
-                "roll_date": roll_date,
-                "note": "Levy details unavailable via API"
-            },
-            "available_data": {
-                "parcel_found": True,
-                "bill_api_available": True,
-                "levy_api_available": False
-            }
-        })
-
-    # Check if response has content and is valid JSON
-    try:
-        if not levy_response.text.strip():
-            return jsonify({"error": "Levy API returned empty response"}), 400
-        levy_data = levy_response.json()
-    except requests.exceptions.JSONDecodeError as e:
-        return jsonify({"error": f"Levy API returned invalid JSON: {str(e)}, response: {levy_response.text}"}), 400
-
-    # Ensure levy data is valid
-    if not levy_data.get('Success'):
-        return jsonify({
-            "error": "Levy API did not return successful data",
-            "parcel_info": {
-                "apn": parcel_number,
-                "address": f"{street_number} {street_name}, {city}"
-            },
-            "levy_data": levy_data
-        })
-
-    # Prepare the response
-    response_data = {
-        "success": True,
-        "parcel_info": {
-            "apn": parcel_number,
-            "address": f"{street_number} {street_name}, {city}"
-        },
-        "bill_info": {
-            "bill_number": bill_number,
-            "roll_date": roll_date
-        },
-        "tax_details": {
-            "total_amount": levy_data['BillAmount'],
-            "levy_total": levy_data['LevyTotal'],
-            "levies": levy_data['Levies']
+            "mello_roos": mello_roos_data,
+            "scraped_at": result['timestamp']
         }
-    }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"[API] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
 
-    return jsonify(response_data)
+def extract_mello_roos(scraped_data):
+    """
+    Extract Mello Roos tax information from scraped data.
+    
+    Args:
+        scraped_data: Dictionary containing scraped property data
+        
+    Returns:
+        dict: Mello Roos tax information
+    """
+    mello_roos_info = {
+        "has_mello_roos": False,
+        "annual_amount": 0,
+        "details": [],
+        "bills": []
+    }
+    
+    tax_details = scraped_data.get('tax_details')
+    if not tax_details:
+        return mello_roos_info
+    
+    bills = tax_details.get('bills', [])
+    
+    for bill in bills:
+        bill_info = {
+            "year": bill.get('year'),
+            "bill_number": bill.get('bill_number'),
+            "total_amount": bill.get('total_amount'),
+            "mello_roos_items": []
+        }
+        
+        # Look for Mello Roos in line items
+        line_items = bill.get('line_items', [])
+        for item in line_items:
+            description = item.get('description', '').lower()
+            
+            # Check if this is a Mello Roos item
+            if 'mello' in description or 'roos' in description or 'cfd' in description:
+                mello_roos_info['has_mello_roos'] = True
+                
+                mello_roos_item = {
+                    "description": item.get('description'),
+                    "amount": item.get('amount', 0),
+                    "code": item.get('code')
+                }
+                
+                bill_info['mello_roos_items'].append(mello_roos_item)
+                mello_roos_info['annual_amount'] += item.get('amount', 0)
+        
+        if bill_info['mello_roos_items']:
+            mello_roos_info['bills'].append(bill_info)
+    
+    # If we found Mello Roos items, add summary
+    if mello_roos_info['has_mello_roos']:
+        # Get unique descriptions
+        all_items = []
+        for bill in mello_roos_info['bills']:
+            all_items.extend(bill['mello_roos_items'])
+        
+        # Group by description
+        descriptions = {}
+        for item in all_items:
+            desc = item['description']
+            if desc not in descriptions:
+                descriptions[desc] = {
+                    "description": desc,
+                    "total_amount": 0,
+                    "occurrences": 0
+                }
+            descriptions[desc]['total_amount'] += item['amount']
+            descriptions[desc]['occurrences'] += 1
+        
+        mello_roos_info['details'] = list(descriptions.values())
+    
+    return mello_roos_info
+
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
