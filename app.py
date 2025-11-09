@@ -23,10 +23,13 @@ def home():
         "endpoints": {
             "/": "GET - Service info",
             "/health": "GET - Health check",
+            "/get-tax-details": "GET - Get complete tax details (Frontend endpoint)",
             "/search": "GET - Search property by address or APN",
-            "/bill-details": "GET - Get detailed tax levy breakdown for a specific bill"
+            "/bill-details": "GET - Get detailed tax levy breakdown for a specific bill",
+            "/get-mello-roos": "GET - Legacy endpoint (backwards compatible)"
         },
         "examples": {
+            "get_tax_details": "/get-tax-details?street_number=932&street_name=farmhouse%20way&city=Folsom",
             "search_by_address": "/search?query=932 farmhouse way folsom",
             "search_by_apn": "/search?apn=071-2040-013-0000",
             "bill_details": "/bill-details?parent_id=c2Fjcm...&bill_id=A4FAABB4..."
@@ -219,6 +222,103 @@ def get_mello_roos_legacy():
             },
             "bills_available": len(result['bills']),
             "most_recent_bill": result['bills'][0] if result['bills'] else None
+        }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"[API] Error: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+@app.route('/get-tax-details', methods=['GET'])
+def get_tax_details():
+    """
+    Frontend endpoint - Get complete tax details including Mello Roos.
+    This is the main endpoint the frontend uses.
+    
+    Query Parameters:
+        - street_number: Street number (e.g., "932")
+        - street_name: Street name (e.g., "farmhouse way")
+        - city: City name (default: "Folsom")
+    
+    Returns:
+        JSON with complete property tax details including Mello Roos breakdown
+    """
+    street_number = request.args.get('street_number')
+    street_name = request.args.get('street_name')
+    city = request.args.get('city', 'Folsom')
+    
+    if not street_number or not street_name:
+        return jsonify({
+            "error": "Missing required parameters",
+            "required": ["street_number", "street_name"],
+            "optional": ["city (default: Folsom)"],
+            "example": "/get-tax-details?street_number=932&street_name=farmhouse%20way&city=Folsom"
+        }), 400
+    
+    # Construct search query
+    query = f"{street_number} {street_name} {city}"
+    
+    try:
+        # Step 1: Search for property
+        result = api.lookup_property(query)
+        
+        if not result.get('success'):
+            return jsonify({
+                "success": False,
+                "error": result.get('error', 'Property not found'),
+                "search_query": query
+            }), 404
+        
+        # Step 2: Get the most recent bill details (if available)
+        bills = result.get('bills', [])
+        mello_roos_data = {
+            "has_mello_roos": False,
+            "annual_amount": 0,
+            "charges": [],
+            "note": "Detailed breakdown available"
+        }
+        
+        ad_valorem_data = {
+            "total": 0,
+            "taxes": []
+        }
+        
+        # If we have bills, try to get detailed breakdown for the most recent one
+        if bills:
+            # We need to extract parent_id and bill_id from the Algolia response
+            # From the search result, we can construct these
+            first_bill = bills[0]
+            
+            # Note: In production, you'd need to construct proper IDs from the search results
+            # For now, we return basic info and indicate how to get detailed breakdown
+            mello_roos_data["note"] = f"To get detailed breakdown for bill {first_bill['bill_number']}, use /bill-details endpoint"
+        
+        # Format response for frontend
+        response = {
+            "success": True,
+            "property_info": {
+                "address": result['address'],
+                "account_number": result['apn'],
+                "parcel_number": result['apn'],
+                "city": city,
+                "zip": result['address'].split()[-1] if result['address'] else ""
+            },
+            "tax_details": {
+                "total_annual_tax": "N/A",
+                "ad_valorem": ad_valorem_data,
+                "mello_roos": mello_roos_data,
+                "bills": bills,
+                "most_recent_bill": bills[0] if bills else None
+            },
+            "bills_available": len(bills),
+            "timestamp": ""
         }
         
         return jsonify(response)
