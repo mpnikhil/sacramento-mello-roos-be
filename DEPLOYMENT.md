@@ -1,235 +1,196 @@
-# Deployment Guide - Sacramento Mello Roos Tax API
+# Sacramento Mello Roos API - Deployment Guide
 
-This guide covers deploying the Playwright-based property tax scraper to **Render.com** using their free tier.
+## 🚀 Deploy to Vercel
 
-## 🎯 Render.com Deployment (FREE)
+### Prerequisites
+- [Vercel CLI](https://vercel.com/docs/cli) installed: `npm install -g vercel`
+- Git repository initialized
+- Vercel account
 
-### Why Render?
-- ✅ **750 hours/month free** (enough for 24/7 service)
-- ✅ Supports Docker & Playwright
-- ✅ Auto-sleep after 15 min inactivity (wakes in ~30 seconds)
-- ✅ Easy deployment from GitHub
-- ✅ Auto-deploy on git push
+### Quick Deployment Steps
 
-### Deployment Steps
+1. **Install Vercel CLI (if not already installed)**
+   ```bash
+   npm install -g vercel
+   ```
 
-**Option 1: Deploy via GitHub (Recommended)**
-```bash
-# 1. Push your code to GitHub
-git add .
-git commit -m "Deploy Mello Roos API to Render"
-git push origin master
+2. **Login to Vercel**
+   ```bash
+   vercel login
+   ```
 
-# 2. Go to https://render.com
-# 3. Sign up (use GitHub)
-# 4. Click "New +" → "Web Service"
-# 5. Connect your GitHub repo: sacramento-mello-roos-be
-# 6. Render will auto-detect the render.yaml config
-# 7. Click "Create Web Service"
-# 8. Wait 5-10 minutes for deployment
-```
+3. **Deploy from your project directory**
+   ```bash
+   cd /Users/nikhilpujari/sacramento-mello-roos-be
+   vercel
+   ```
 
-**Option 2: Deploy via Render MCP (from this project)**
-- Already configured with Render MCP server
-- Can deploy directly using MCP commands
+4. **Follow the prompts:**
+   - Set up and deploy? **Y**
+   - Which scope? Select your account
+   - Link to existing project? **N**
+   - Project name? **sacramento-mello-roos-api** (or your choice)
+   - Directory? **./** (current directory)
+   - Override settings? **N**
 
-**Your API will be at:** `https://sacramento-tax-api.onrender.com`
+5. **Deploy to production**
+   ```bash
+   vercel --prod
+   ```
 
----
+### Alternative: Deploy via Vercel Dashboard
 
-## 🚀 Quick Start (Local Testing)
-
-### Using Docker (Recommended)
-```bash
-# Build the image
-docker build -t sacramento-tax-api .
-
-# Run the container
-docker run -p 8080:8080 \
-  -e BROWSER_HEADLESS=true \
-  -e CACHE_MAX_AGE_DAYS=30 \
-  sacramento-tax-api
-
-# Test it
-curl "http://localhost:8080/get-tax-details?street_number=932&street_name=farmhouse%20way&city=Folsom"
-```
-
-### Using Python Directly
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Install Playwright browsers
-playwright install chromium
-
-# Run the app
-gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 120 app:app
-
-# Or for development
-python -c "from app import app; app.run(host='0.0.0.0', port=8080, debug=True)"
-```
-
----
+1. Go to [vercel.com](https://vercel.com)
+2. Click "Add New Project"
+3. Import your Git repository
+4. Vercel will auto-detect the Flask app
+5. Click "Deploy"
 
 ## 📡 API Endpoints
 
-### Get Tax Details
+Once deployed, your API will be available at: `https://your-project.vercel.app`
+
+### 1. **Root / Health Check**
 ```bash
-GET /get-tax-details?street_number=932&street_name=farmhouse%20way&city=Folsom
+GET /
+GET /health
 ```
 
-**Query Parameters:**
-- `street_number` (required): Street number
-- `street_name` (required): Street name
-- `city` (optional): City name (default: "Folsom")
-- `force_refresh` (optional): Force fresh scrape (default: "false")
+### 2. **Search Property**
+```bash
+GET /search?query=932 farmhouse way folsom
+GET /search?apn=071-2040-013-0000
+```
 
 **Response:**
 ```json
 {
   "success": true,
-  "source": "cache",
-  "property_info": {
-    "objectID": "...",
-    "account_number": "...",
-    "address": "932 Farmhouse Way",
-    "city": "Folsom",
-    "zip": "95630"
+  "property": {
+    "apn": "071-2040-013-0000",
+    "address": "932 FARMHOUSE WAY FOLSOM 95630"
   },
-  "tax_details": {
-    "bills": [...],
-    "payment_history": [...]
-  },
-  "cache_info": {
-    "cached_at": "2024-10-21T10:30:00",
-    "cache_age_days": 2
-  }
+  "bills": [
+    {
+      "bill_number": "20250150210",
+      "display_name": "2025 Secured Annual Bill #20250150210",
+      "custom_parameters": {...}
+    }
+  ],
+  "total_bills": 10
 }
 ```
 
-### Cache Stats
+### 3. **Get Bill Details (Mello Roos Breakdown)**
 ```bash
-GET /cache-stats
+GET /bill-details?parent_id=<parent_id>&bill_id=<bill_id>
 ```
 
-### Health Check
+**Response:**
+```json
+{
+  "success": true,
+  "ad_valorem_taxes": [
+    {
+      "name": "Countywide Tax (Secured)",
+      "rate": "1.00000000%",
+      "taxable_value": "$681,139.00",
+      "tax_amount": "$6,811.39"
+    }
+  ],
+  "total_ad_valorem": 7429.18,
+  "mello_roos": {
+    "has_mello_roos": true,
+    "charges": [
+      {
+        "name": "CFD NO 16 IA2 ISLANDS AT PARKSHORE",
+        "code": "0112",
+        "phone": "(888) 892-2480",
+        "amount": "$2,243.70"
+      }
+    ],
+    "total_mello_roos": 2260.34
+  },
+  "grand_total": 9689.52
+}
+```
+
+### 4. **Legacy Endpoint (Backwards Compatible)**
 ```bash
-GET /health
+GET /get-mello-roos?street_number=932&street_name=farmhouse way&city=Folsom
 ```
 
----
+## 🧪 Testing the Deployed API
 
-## 🎛️ Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BROWSER_HEADLESS` | `true` | Run browser in headless mode |
-| `CACHE_MAX_AGE_DAYS` | `30` | Maximum cache age before re-scraping |
-| `PORT` | `8080` | Server port |
-| `PYTHONUNBUFFERED` | `1` | Disable Python output buffering |
-
----
-
-## 💾 Database & Caching
-
-- **Database:** SQLite (stored in `/app/data/` or `/tmp/` for serverless)
-- **Cache Duration:** 30 days (configurable)
-- **Cache Logic:**
-  1. Check cache first
-  2. If cache miss or expired → scrape with Playwright
-  3. Save to cache
-  4. Return data
-
-**Note:** On free tiers, the filesystem may reset after inactivity. This means cache will be lost but will rebuild automatically on next request.
-
----
-
-## 📊 Performance
-
-- **Scrape Time:** ~3-8 seconds per request
-- **Browser Memory:** ~150-300MB per scrape
-- **Recommended:** 512MB RAM minimum
-- **Cold Start:** ~30-60 seconds (after 15 min inactivity)
-
----
-
-## 🔍 Monitoring & Debugging
-
-### View Logs
 ```bash
-# In Render dashboard:
-# 1. Go to your service
-# 2. Click "Logs" tab
-# 3. View real-time logs
+# Test search
+curl "https://your-project.vercel.app/search?query=932%20farmhouse%20way%20folsom"
+
+# Test bill details
+curl "https://your-project.vercel.app/bill-details?parent_id=c2FjcmFtZW50by1jYTpnc2d4X3Byb3BlcnR5X3RheDpwYXJlbnRzOmE0ZjRkNWVhLThiNWYtMTFmMC04Zjg5LWYxMjRjNWEyMDM0Yw==&bill_id=A4FAABB4-8B5F-11F0-A666-A9B7592EE820"
 ```
 
-### Test Locally Without Headless
-```python
-# In scraper.py
-scraper = PropertyTaxScraper(headless=False)
-```
+## 📝 Environment Variables
 
-### Test Locally with Docker
+No environment variables required! The API uses public data sources.
+
+## 🔧 Local Development
+
 ```bash
-docker build -t sacramento-tax-api .
-docker run -p 8080:8080 -e BROWSER_HEADLESS=true sacramento-tax-api
-curl "http://localhost:8080/get-mello-roos?street_number=932&street_name=farmhouse%20way&city=Folsom"
+# Activate virtual environment
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run locally
+python app.py
+
+# Test locally
+curl http://localhost:8080/
 ```
 
----
+## 🚨 Troubleshooting
 
-## 🆘 Troubleshooting
+### Build Fails
+- Make sure `requirements.txt` is in the root directory
+- Verify `vercel.json` configuration is correct
 
-### Issue: "Browser not found"
+### API Returns Errors
+- Check that Sacramento County website is accessible
+- Verify the search query format
+
+### CORS Issues
+- CORS is enabled for all origins by default
+- Modify `CORS(app, resources={...})` in `app.py` if needed
+
+## 📊 Performance Notes
+
+- **Fast:** No browser automation, pure API calls
+- **Reliable:** Direct API access to Sacramento County data
+- **Scalable:** Serverless deployment handles traffic automatically
+
+## 🔄 Updating the Deployment
+
 ```bash
-# Install Playwright browsers locally
-playwright install chromium
-playwright install-deps chromium
+# Make changes to your code
+git add .
+git commit -m "Update API"
+git push
+
+# Redeploy
+vercel --prod
 ```
 
-### Issue: "Out of memory"
-- Free tier has 512MB RAM (should be sufficient)
-- If issues persist, reduce worker count to 1 in Dockerfile
-- Consider upgrading to Starter plan ($7/month) for 512MB RAM
+## 📚 API Features
 
-### Issue: "Timeout"
-- Default timeout is 120 seconds (set in Dockerfile)
-- If needed, increase in render.yaml or Dockerfile
-- Check if Sacramento County website is down
-
-### Issue: "Service sleeping"
-- Normal behavior on free tier
-- Service auto-wakes on request (30-60 seconds)
-- Upgrade to Starter plan for 24/7 uptime
+✅ **Property Search** - Search by address or APN  
+✅ **Bill History** - Get all tax bills for a property  
+✅ **Detailed Breakdown** - Ad Valorem taxes and Mello Roos charges  
+✅ **No Browser** - Fast API-based scraping  
+✅ **CORS Enabled** - Use from any frontend  
+✅ **Backwards Compatible** - Legacy endpoints still work
 
 ---
 
-## 🎁 Render Free Tier
-
-- **750 hours/month** (enough for 24/7 operation)
-- **512MB RAM**
-- **Auto-sleep after 15 min inactivity**
-- **Free custom domains**
-- **Free SSL certificates**
-
-**Perfect for this use case!**
-
----
-
-## 🚀 Next Steps
-
-1. Choose a platform (I recommend **Render.com**)
-2. Deploy following the steps above
-3. Test your API
-4. Update your frontend to use the new endpoint
-5. (Optional) Add custom domain
-
----
-
-## 📝 Notes
-
-- First request after sleep may take 30-60 seconds (cold start)
-- Subsequent requests are fast
-- Cache reduces scraping frequency and improves response time
-- For production with high traffic, consider paid tier ($7-20/month)
-
+**Questions?** Check the code comments in `app.py` and `sacramento_tax_api.py`
