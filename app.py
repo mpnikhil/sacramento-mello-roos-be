@@ -276,33 +276,116 @@ def get_tax_details():
                 "search_query": query
             }), 404
         
-        # Step 2: Get the most recent bill details (if available)
+        # Step 2: Get ACTUAL tax breakdown with Mello Roos!
         bills = result.get('bills', [])
         mello_roos_data = {
             "has_mello_roos": False,
-            "annual_amount": 0,
+            "annual_amount": 0.0,
             "charges": [],
-            "note": "Detailed breakdown available"
+            "details": []
         }
         
         ad_valorem_data = {
-            "total": 0,
+            "total": 0.0,
             "taxes": []
         }
         
-        # If we have bills, try to get detailed breakdown for the most recent one
-        if bills:
-            # We need to extract parent_id and bill_id from the Algolia response
-            # From the search result, we can construct these
-            first_bill = bills[0]
-            
-            # Note: In production, you'd need to construct proper IDs from the search results
-            # For now, we return basic info and indicate how to get detailed breakdown
-            mello_roos_data["note"] = f"To get detailed breakdown for bill {first_bill['bill_number']}, use /bill-details endpoint"
+        total_annual_tax = 0.0
         
-        # Format response for frontend
+        # If we have bills, fetch the REAL breakdown using our working scraper!
+        if bills:
+            try:
+                # Get the raw search result to extract parent_id and bill_id
+                raw_results = api.search_property(query)
+                if raw_results and len(raw_results) > 0:
+                    selected = raw_results[0]
+                    
+                    # Extract parent_id from objectID and base64 encode it
+                    import base64
+                    object_id = selected.get('objectID', '')
+                    # Format: /Taxsys-GovHub/v0/items/sacramento-ca:gsgx_property_tax:parents:GUID
+                    parent_path = object_id.replace('/Taxsys-GovHub/v0/items/', '')
+                    parent_id = base64.b64encode(parent_path.encode()).decode() if parent_path else ''
+                    
+                    # Extract bill_id - we need to construct the bill page URL
+                    # The bill pages follow pattern: /bills/{BILL_GUID}
+                    # We can try to fetch the account page and extract the first bill GUID
+                    if parent_id:
+                        # parent_id is already base64 encoded and ready to use!
+                        # Now fetch the account page to extract the bill GUID
+                        from bs4 import BeautifulSoup
+                        
+                        try:
+                            # Fetch the account summary page to get bill GUIDs
+                            account_url = f"https://county-taxes.net/iframe-taxsys/sacramento-ca.county-taxes.com/govhub/property-tax/{parent_id}"
+                            response = api.session.get(account_url)
+                            
+                            if response.status_code == 200:
+                                soup = BeautifulSoup(response.text, 'html.parser')
+                                # Find links to bill pages - they contain the bill GUID
+                                bill_links = soup.find_all('a', href=True)
+                                for link in bill_links:
+                                    href = link.get('href', '')
+                                    link_text = link.get_text()
+                                    # Look for the most recent bill number in the link
+                                    if '/bills/' in href and bills[0]['bill_number'] in link_text:
+                                        # Extract bill GUID from URL like: .../bills/A4FAABB4-8B5F-11F0-A666-A9B7592EE820
+                                        bill_id = href.split('/bills/')[-1].split('?')[0].split('#')[0]
+                                        
+                                        print(f"[API] Found bill_id: {bill_id}", file=sys.stderr)
+                                        
+                                        # NOW fetch the REAL breakdown!
+                                        breakdown = api.get_bill_levy_breakdown(parent_id, bill_id)
+                                        
+                                        if breakdown:
+                                            # SUCCESS! We got the real data!
+                                            ad_valorem_data = {
+                                                "total": breakdown['total_ad_valorem'],
+                                                "taxes": breakdown['ad_valorem_taxes']
+                                            }
+                                            
+                                            mello_roos_charges = breakdown.get('direct_charges', [])
+                                            mello_roos_data = {
+                                                "has_mello_roos": len(mello_roos_charges) > 0,
+                                                "annual_amount": breakdown['total_direct_charges'],
+                                                "charges": mello_roos_charges,
+                                                "details": mello_roos_charges
+                                            }
+                                            
+                                            total_annual_tax = breakdown['grand_total']
+                                            print(f"[API] Successfully fetched breakdown! Total: ${total_annual_tax}", file=sys.stderr)
+                                        break
+                        except Exception as parse_error:
+                            print(f"[API] Error extracting bill_id: {parse_error}", file=sys.stderr)
+                            import traceback
+                            traceback.print_exc()
+                            
+            except Exception as e:
+                print(f"[API] Error fetching detailed breakdown: {str(e)}", file=sys.stderr)
+                import traceback
+                traceback.print_exc()
+        
+        # Format response for frontend - matching the structure the frontend expects
+        # Convert mello_roos charges to the format the frontend needs
+        levies = []
+        for charge in mello_roos_data.get('charges', []):
+            # Extract numeric amount from string like "$2,243.70"
+            amount_str = charge.get('amount', '0')
+            amount_numeric = float(amount_str.replace('$', '').replace(',', ''))
+            
+            levies.append({
+                "LevyNumber": charge.get('code', 'N/A'),
+                "LevyName": charge.get('name', ''),
+                "LevyAmount": amount_numeric,
+                "LevyCD": charge.get('code', 'N/A')
+            })
+        
+        # Main response format that frontend expects
         response = {
             "success": True,
+            "levy_total": mello_roos_data.get('annual_amount', 0.0),
+            "levies": levies,
+            # Also include detailed data for completeness
             "property_info": {
                 "address": result['address'],
                 "account_number": result['apn'],
@@ -311,7 +394,7 @@ def get_tax_details():
                 "zip": result['address'].split()[-1] if result['address'] else ""
             },
             "tax_details": {
-                "total_annual_tax": "N/A",
+                "total_annual_tax": total_annual_tax,
                 "ad_valorem": ad_valorem_data,
                 "mello_roos": mello_roos_data,
                 "bills": bills,
